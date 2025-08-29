@@ -1,0 +1,1 @@
+RandomForestRegressor<_, f64, std::result::Result<DenseMatrix<_>, smartcore::error::Failed>, Vec<f64>>
