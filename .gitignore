@@ -1,0 +1,32 @@
+# Environment files
+.env
+.env.production
+.env.local
+*.env
+
+# Keys and secrets
+*.key
+*.pem
+private_key.txt
+
+# Build artifacts
+target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+logs/
+*.log
+
+# Data
+data/*.db
+data/*.log
+
+# OS
+.DS_Store
+Thumbs.db

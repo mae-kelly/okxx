@@ -1,6 +1,6 @@
 use ethers::providers::{Provider, Http};
-// Ws provider removed - using Http instead
-use ethers::types::transaction::eip2718::TypedTransaction;use std::sync::Arc;
+use ethers::types::transaction::eip2718::TypedTransaction;
+use std::sync::Arc;
 use ethers::prelude::*;
 use anyhow::Result;
 use dashmap::DashMap;
@@ -14,7 +14,7 @@ pub struct ChainManager {
     websocket_providers: DashMap<Chain, Arc<Provider<Http>>>,
 }
 
-#[allow(dead_code)]impl ChainManager {
+impl ChainManager {
     pub async fn new() -> Result<Self> {
         let manager = Self {
             providers: DashMap::new(),
@@ -91,13 +91,9 @@ pub struct ChainManager {
         })
     }
     
-    pub async fn estimate_gas(&self, chain: &Chain, data: Vec<u8>) -> Result<U256> {
+    pub async fn estimate_gas(&self, chain: &Chain, tx: TypedTransaction) -> Result<U256> {
         let provider = self.providers.get(chain)
             .ok_or_else(|| anyhow::anyhow!("Provider not found"))?;
-        
-        let tx = TypedTransaction::Legacy(TransactionRequest::new()
-            .data(data)
-            .to(Address::zero()));
         
         let gas = provider.estimate_gas(&tx, None).await?;
         Ok(gas)
@@ -118,8 +114,4 @@ pub struct ChainManager {
         let block = provider.get_block_number().await?;
         Ok(block.as_u64())
     }
-    
-//     pub async fn subscribe_blocks(&self, chain: &Chain) -> Result<()> {
-//         if let Some(ws_provider) = self.websocket_providers.get(chain) {
-//             let mut stream = ws_provider.subscribe_blocks().await?;
 }

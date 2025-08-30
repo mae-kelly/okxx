@@ -1,1 +1,0 @@
-cargo:rustc-env=MIME_TYPES_GENERATED_PATH=/Users/maevekelly/Downloads/okx/target/release/build/mime_guess-25a33959a993b0f8/out/mime_types_generated.rs

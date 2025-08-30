@@ -14,7 +14,8 @@ pub struct MLAnalyzer {
     models: HashMap<String, RandomForestRegressor<f64, f64, DenseMatrix<f64>, Vec<f64>>>,
 }
 
-#[allow(dead_code)]impl MLAnalyzer {
+#[allow(dead_code)]
+impl MLAnalyzer {
     pub fn new(storage: Arc<StorageEngine>) -> Result<Self> {
         Ok(Self {
             storage,
@@ -207,6 +208,11 @@ pub struct MLAnalyzer {
                 Chain::Linea => 11.0,
                 Chain::Scroll => 12.0,
                 Chain::Blast => 13.0,
+                Chain::PolygonZkEVM => 14.0,
+                Chain::Gnosis => 15.0,
+                Chain::Celo => 16.0,
+                Chain::Moonbeam => 17.0,
+                Chain::Aurora => 18.0,
             };
             features[[i, 8]] = opp.execution_time_ms as f64;
             features[[i, 9]] = opp.profit_usd;
@@ -223,26 +229,32 @@ pub struct MLAnalyzer {
         let n_samples = features.nrows();
         let split_index = (n_samples as f64 * 0.8) as usize;
         
+        let train_data: Vec<Vec<f64>> = features.slice(s![..split_index, ..9])
+            .outer_iter()
+            .map(|row| row.to_vec())
+            .collect();
+        
         let x_train = DenseMatrix::from_2d_array(
-            &features.slice(s![..split_index, ..9])
-                .outer_iter()
-                .map(|row| row.to_vec())
-                .collect::<Vec<_>>()
+            &train_data
                 .iter()
                 .map(|v| v.as_slice())
                 .collect::<Vec<_>>()
-        ).unwrap();
+        );
+        
         let y_train: Vec<f64> = features.slice(s![..split_index, 9]).to_owned().into_raw_vec_and_offset().0;
         
+        let test_data: Vec<Vec<f64>> = features.slice(s![split_index.., ..9])
+            .outer_iter()
+            .map(|row| row.to_vec())
+            .collect();
+        
         let x_test = DenseMatrix::from_2d_array(
-            &features.slice(s![split_index.., ..9])
-                .outer_iter()
-                .map(|row| row.to_vec())
-                .collect::<Vec<_>>()
+            &test_data
                 .iter()
                 .map(|v| v.as_slice())
                 .collect::<Vec<_>>()
-        ).unwrap();
+        );
+        
         let y_test: Vec<f64> = features.slice(s![split_index.., 9]).to_owned().into_raw_vec_and_offset().0;
         
         let model = RandomForestRegressor::fit(
@@ -307,15 +319,17 @@ pub struct MLAnalyzer {
                     chain_targets.push(features[[orig_i, 9]]);
                 }
                 
+                let features_data: Vec<Vec<f64>> = chain_features
+                    .outer_iter()
+                    .map(|row| row.to_vec())
+                    .collect();
+                
                 let x = DenseMatrix::from_2d_array(
-                    &chain_features
-                        .outer_iter()
-                        .map(|row| row.to_vec())
-                        .collect::<Vec<_>>()
+                    &features_data
                         .iter()
                         .map(|v| v.as_slice())
                         .collect::<Vec<_>>()
-                ).unwrap();
+                );
                 
                 let model = RandomForestRegressor::fit(
                     &x,

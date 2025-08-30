@@ -20,7 +20,7 @@ pub struct PriceData {
     pub spread: Decimal,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum Chain {
     Ethereum,
     BinanceSmartChain,
@@ -35,6 +35,58 @@ pub enum Chain {
     Linea,
     Scroll,
     Blast,
+    PolygonZkEVM,
+    Gnosis,
+    Celo,
+    Moonbeam,
+    Aurora,
+}
+
+impl Chain {
+    pub fn chain_id(&self) -> u64 {
+        match self {
+            Chain::Ethereum => 1,
+            Chain::BinanceSmartChain => 56,
+            Chain::Polygon => 137,
+            Chain::Arbitrum => 42161,
+            Chain::Optimism => 10,
+            Chain::Avalanche => 43114,
+            Chain::Fantom => 250,
+            Chain::Solana => 0,
+            Chain::Base => 8453,
+            Chain::ZkSync => 324,
+            Chain::Linea => 59144,
+            Chain::Scroll => 534352,
+            Chain::Blast => 81457,
+            Chain::PolygonZkEVM => 1101,
+            Chain::Gnosis => 100,
+            Chain::Celo => 42220,
+            Chain::Moonbeam => 1284,
+            Chain::Aurora => 1313161554,
+        }
+    }
+
+    pub fn all_production_chains() -> Vec<Chain> {
+        vec![
+            Chain::Ethereum,
+            Chain::BinanceSmartChain,
+            Chain::Polygon,
+            Chain::Arbitrum,
+            Chain::Optimism,
+            Chain::Avalanche,
+            Chain::Fantom,
+            Chain::Base,
+            Chain::ZkSync,
+            Chain::Linea,
+            Chain::Scroll,
+            Chain::Blast,
+            Chain::PolygonZkEVM,
+            Chain::Gnosis,
+            Chain::Celo,
+            Chain::Moonbeam,
+            Chain::Aurora,
+        ]
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -170,4 +222,80 @@ pub enum MessageType {
     Liquidity,
     Block,
     Mempool,
+}
+
+// Additional types for exchanges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Token {
+    pub address: String,
+    pub symbol: String,
+    pub decimals: u8,
+    pub chain_id: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenPair {
+    pub base: Token,
+    pub quote: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Price {
+    pub bid: Decimal,
+    pub ask: Decimal,
+    pub bid_size: Decimal,
+    pub ask_size: Decimal,
+    pub timestamp: DateTime<Utc>,
+    pub exchange: String,
+    pub pair: TokenPair,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Order {
+    pub price: Decimal,
+    pub quantity: Decimal,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderBook {
+    pub exchange: String,
+    pub pair: TokenPair,
+    pub bids: Vec<Order>,
+    pub asks: Vec<Order>,
+    pub timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeFees {
+    pub maker_fee: Decimal,
+    pub taker_fee: Decimal,
+    pub withdrawal_fee: std::collections::HashMap<String, Decimal>,
+}
+
+// Additional types for arbitrage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlashLoanInfo {
+    pub provider: String,
+    pub fee: Decimal,
+    pub fee_percentage: Decimal,
+    pub max_amount: Decimal,
+}
+
+// ML types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArbitrageDetector;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsCollector;
+
+impl Default for SharedState {
+    fn default() -> Self {
+        Self {
+            liquidity_pools: Arc::new(DashMap::new()),
+            gas_prices: Arc::new(DashMap::new()),
+            opportunities: Arc::new(DashMap::new()),
+            historical_data: Arc::new(DashMap::new()),
+        }
+    }
 }

@@ -11,6 +11,7 @@ use crate::types::{
 };
 use crate::chains::ChainManager;
 use crate::dexs::DexManager;
+use tracing::info;
 
 pub struct ArbitrageEngine {
     state: Arc<SharedState>,
@@ -345,7 +346,7 @@ impl ArbitrageEngine {
                 .to_f64().unwrap_or(0.0);
             
             Some(ArbitrageOpportunity {
-                id: format!("{}", blake3::hash(format!("{:?}{}", path, Utc::now()).as_bytes())),
+                id: format!("arb_{}_{}", chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
                 path: trade_legs,
                 initial_amount,
                 final_amount: current_amount,
@@ -413,7 +414,7 @@ impl ArbitrageEngine {
         ];
         
         Ok(ArbitrageOpportunity {
-            id: format!("{}", blake3::hash(format!("{}{}{}{}", token, buy_exchange, sell_exchange, Utc::now()).as_bytes())),
+            id: format!("arb_{}_{}", chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
             path: trade_legs,
             initial_amount,
             final_amount,
@@ -446,7 +447,7 @@ impl ArbitrageEngine {
         
         if net_profit > Decimal::from(100) {
             Some(ArbitrageOpportunity {
-                id: format!("{}", blake3::hash(format!("{}{}", pool.address, Utc::now()).as_bytes())),
+                id: format!("arb_{}_{}", pool.chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
                 path: vec![
                     TradeLeg {
                         exchange: pool.exchange.clone(),
