@@ -1,3 +1,0 @@
-DashMap<std::string::String, rust_decimal::Decimal>
-DashMap<std::string::String, rust_decimal::Decimal>: Serialize
-DashMap<std::string::String, rust_decimal::Decimal>: Deserialize<'_>
