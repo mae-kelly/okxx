@@ -1,23 +1,19 @@
-use std::sync::Arc;
+use crate::chains::ChainManager;
+use crate::config::Config;
+use crate::dexs::DexManager;
+use crate::flashloan::FlashLoanManager;
+use crate::types::*;
 use anyhow::Result;
 use rust_decimal::Decimal;
-use rust_decimal::prelude::ToPrimitive;
-use std::str::FromStr;
+use std::sync::Arc;
 use chrono::Utc;
-use std::collections::{HashMap, HashSet, VecDeque};
-use crate::types::{
-    SharedState, ArbitrageOpportunity, TradeLeg, Chain, 
-    FlashLoanProvider, LiquidityPool, PriceData, GasPrice
-};
-use crate::chains::ChainManager;
-use crate::dexs::DexManager;
-use tracing::info;
 
 pub struct ArbitrageEngine {
     state: Arc<SharedState>,
     chain_manager: Arc<ChainManager>,
     dex_manager: Arc<DexManager>,
-    flash_loan_providers: Vec<FlashLoanProvider>,
+    flash_loan_manager: Arc<FlashLoanManager>,
+    config: Config,
 }
 
 impl ArbitrageEngine {
@@ -25,125 +21,83 @@ impl ArbitrageEngine {
         state: Arc<SharedState>,
         chain_manager: Arc<ChainManager>,
         dex_manager: Arc<DexManager>,
+        flash_loan_manager: Arc<FlashLoanManager>,
+        config: Config,
     ) -> Self {
-        let flash_loan_providers = vec![
-            FlashLoanProvider {
-                name: "Aave V3".to_string(),
-                chain: Chain::Ethereum,
-                fee_percentage: Decimal::from_str("0.0009").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2".to_string(),
-            },
-            FlashLoanProvider {
-                name: "Aave V3".to_string(),
-                chain: Chain::Arbitrum,
-                fee_percentage: Decimal::from_str("0.0009").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x794a61358D6845594F94dc1DB02A252b5b4814aD".to_string(),
-            },
-            FlashLoanProvider {
-                name: "Aave V3".to_string(),
-                chain: Chain::Optimism,
-                fee_percentage: Decimal::from_str("0.0009").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x794a61358D6845594F94dc1DB02A252b5b4814aD".to_string(),
-            },
-            FlashLoanProvider {
-                name: "Aave V3".to_string(),
-                chain: Chain::Polygon,
-                fee_percentage: Decimal::from_str("0.0009").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x794a61358D6845594F94dc1DB02A252b5b4814aD".to_string(),
-            },
-            FlashLoanProvider {
-                name: "dYdX".to_string(),
-                chain: Chain::Ethereum,
-                fee_percentage: Decimal::from_str("0.0").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x1E0447b19BB6EcFdAe1e4AE1694b0C3659614e4e".to_string(),
-            },
-            FlashLoanProvider {
-                name: "Balancer".to_string(),
-                chain: Chain::Ethereum,
-                fee_percentage: Decimal::from_str("0.0").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0xBA12222222228d8Ba445958a75a0704d566BF2C8".to_string(),
-            },
-            FlashLoanProvider {
-                name: "Uniswap V3".to_string(),
-                chain: Chain::Ethereum,
-                fee_percentage: Decimal::from_str("0.0001").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45".to_string(),
-            },
-            FlashLoanProvider {
-                name: "PancakeSwap V3".to_string(),
-                chain: Chain::BinanceSmartChain,
-                fee_percentage: Decimal::from_str("0.0001").unwrap(),
-                max_loan_amount: std::collections::HashMap::new(),
-                contract_address: "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4".to_string(),
-            },
-        ];
-        
         Self {
             state,
             chain_manager,
             dex_manager,
-            flash_loan_providers,
+            flash_loan_manager,
+            config,
         }
     }
     
     pub async fn scan_opportunities(&self) -> Result<Vec<ArbitrageOpportunity>> {
         let mut opportunities = Vec::new();
         
-        for chain in &[
-            Chain::Ethereum,
-            Chain::BinanceSmartChain,
-            Chain::Polygon,
-            Chain::Arbitrum,
-            Chain::Optimism,
-            Chain::Avalanche,
-            Chain::Fantom,
-            Chain::Base,
-        ] {
-            let chain_opportunities = self.scan_chain(chain).await?;
-            opportunities.extend(chain_opportunities);
+        // Scan each chain
+        for chain in Chain::all() {
+            if let Some(_provider) = self.chain_manager.get_provider(&chain) {
+                // Get gas price for the chain
+                let gas_price = self.state.gas_prices.get(&chain)
+                    .map(|g| g.standard)
+                    .unwrap_or(Decimal::from(50));
+                
+                // Skip if gas price is too high
+                if gas_price > self.config.max_gas_price_gwei {
+                    continue;
+                }
+                
+                // Find triangular arbitrage opportunities
+                if let Ok(tri_arbs) = self.find_triangular_arbitrage(&chain, gas_price).await {
+                    opportunities.extend(tri_arbs);
+                }
+                
+                // Find cross-DEX arbitrage opportunities
+                if let Ok(cross_arbs) = self.find_cross_dex_arbitrage(&chain, gas_price).await {
+                    opportunities.extend(cross_arbs);
+                }
+            }
         }
         
-        opportunities.sort_by(|a, b| b.profit_usd.partial_cmp(&a.profit_usd).unwrap());
-        opportunities.truncate(100);
+        // Sort by profit
+        opportunities.sort_by(|a, b| b.net_profit_usd.partial_cmp(&a.net_profit_usd).unwrap());
         
         Ok(opportunities)
     }
     
-    async fn scan_chain(&self, chain: &Chain) -> Result<Vec<ArbitrageOpportunity>> {
+    async fn find_triangular_arbitrage(
+        &self,
+        chain: &Chain,
+        gas_price: Decimal,
+    ) -> Result<Vec<ArbitrageOpportunity>> {
         let mut opportunities = Vec::new();
         
-        let triangular_opps = self.find_triangular_arbitrage(chain).await?;
-        opportunities.extend(triangular_opps);
+        // Get all pools for this chain
+        let pools: Vec<LiquidityPool> = self.state.pools
+            .iter()
+            .filter(|p| p.chain == *chain)
+            .map(|p| p.clone())
+            .collect();
         
-        let cross_dex_opps = self.find_cross_dex_arbitrage(chain).await?;
-        opportunities.extend(cross_dex_opps);
+        // Common triangular paths: USDC -> ETH -> TOKEN -> USDC
+        let base_amount = Decimal::from(10000); // Start with $10k USDC
         
-        let sandwich_opps = self.find_sandwich_opportunities(chain).await?;
-        opportunities.extend(sandwich_opps);
-        
-        Ok(opportunities)
-    }
-    
-    async fn find_triangular_arbitrage(&self, chain: &Chain) -> Result<Vec<ArbitrageOpportunity>> {
-        let mut opportunities = Vec::new();
-        let pools = self.get_pools_for_chain(chain);
-        
-        let token_graph = self.build_token_graph(&pools);
-        
-        for (start_token, _) in token_graph.iter() {
-            let paths = self.find_arbitrage_paths(start_token, &token_graph, 3);
-            
-            for path in paths {
-                if let Some(opportunity) = self.calculate_path_profit(path, chain).await {
-                    if opportunity.profit_usd > 50.0 {
-                        opportunities.push(opportunity);
+        for pool1 in &pools {
+            for pool2 in &pools {
+                for pool3 in &pools {
+                    if let Some(opp) = self.check_triangular_path(
+                        chain,
+                        pool1,
+                        pool2,
+                        pool3,
+                        base_amount,
+                        gas_price,
+                    ).await {
+                        if opp.net_profit_usd > self.config.min_profit_usd {
+                            opportunities.push(opp);
+                        }
                     }
                 }
             }
@@ -152,48 +106,37 @@ impl ArbitrageEngine {
         Ok(opportunities)
     }
     
-    async fn find_cross_dex_arbitrage(&self, chain: &Chain) -> Result<Vec<ArbitrageOpportunity>> {
+    async fn find_cross_dex_arbitrage(
+        &self,
+        chain: &Chain,
+        gas_price: Decimal,
+    ) -> Result<Vec<ArbitrageOpportunity>> {
         let mut opportunities = Vec::new();
-        let prices = self.get_prices_for_chain(chain);
         
-        let mut token_prices: HashMap<String, Vec<(String, Decimal)>> = HashMap::new();
+        // Get prices from different sources
+        let prices: Vec<PriceData> = self.state.prices
+            .iter()
+            .filter(|p| p.chain == *chain)
+            .map(|p| p.clone())
+            .collect();
         
-        for (_, price_data) in prices {
-            let tokens: Vec<&str> = price_data.token_pair.split('/').collect();
-            if tokens.len() == 2 {
-                token_prices.entry(tokens[0].to_string())
-                    .or_insert_with(Vec::new)
-                    .push((price_data.exchange.clone(), price_data.price));
-            }
-        }
-        
-        for (token, exchanges) in token_prices {
-            if exchanges.len() >= 2 {
-                for i in 0..exchanges.len() {
-                    for j in i+1..exchanges.len() {
-                        let price_diff = (exchanges[i].1 - exchanges[j].1).abs();
-                        let avg_price = (exchanges[i].1 + exchanges[j].1) / Decimal::from(2);
-                        let spread_percentage = (price_diff / avg_price) * Decimal::from(100);
-                        
-                        if spread_percentage > Decimal::from_str("0.5").unwrap() {
-                            let (buy_exchange, buy_price, sell_exchange, sell_price) = 
-                                if exchanges[i].1 < exchanges[j].1 {
-                                    (&exchanges[i].0, exchanges[i].1, &exchanges[j].0, exchanges[j].1)
-                                } else {
-                                    (&exchanges[j].0, exchanges[j].1, &exchanges[i].0, exchanges[i].1)
-                                };
-                            
-                            let opportunity = self.create_cross_dex_opportunity(
-                                &token,
-                                buy_exchange,
-                                sell_exchange,
-                                buy_price,
-                                sell_price,
-                                chain,
-                            ).await?;
-                            
-                            if opportunity.profit_usd > 50.0 {
-                                opportunities.push(opportunity);
+        // Look for price discrepancies
+        for price1 in &prices {
+            for price2 in &prices {
+                if price1.token_pair == price2.token_pair && price1.source != price2.source {
+                    let price_diff = (price1.price - price2.price).abs();
+                    let avg_price = (price1.price + price2.price) / Decimal::from(2);
+                    let spread_pct = (price_diff / avg_price) * Decimal::from(100);
+                    
+                    if spread_pct > Decimal::from_str_exact("0.5").unwrap() {
+                        if let Some(opp) = self.create_cross_dex_opportunity(
+                            chain,
+                            price1,
+                            price2,
+                            gas_price,
+                        ).await {
+                            if opp.net_profit_usd > self.config.min_profit_usd {
+                                opportunities.push(opp);
                             }
                         }
                     }
@@ -204,160 +147,99 @@ impl ArbitrageEngine {
         Ok(opportunities)
     }
     
-    async fn find_sandwich_opportunities(&self, chain: &Chain) -> Result<Vec<ArbitrageOpportunity>> {
-        let mut opportunities = Vec::new();
-        
-        let pools = self.get_pools_for_chain(chain);
-        let gas_price = self.state.gas_prices.get(chain).map(|g| g.clone());
-        
-        if let Some(gas) = gas_price {
-            for pool in pools.iter() {
-                let slippage_opportunity = self.calculate_sandwich_profit(pool, &gas).await;
-                if let Some(opp) = slippage_opportunity {
-                    if opp.profit_usd > 100.0 {
-                        opportunities.push(opp);
-                    }
-                }
-            }
-        }
-        
-        Ok(opportunities)
-    }
-    
-    fn get_pools_for_chain(&self, chain: &Chain) -> Vec<LiquidityPool> {
-        self.state.liquidity_pools.iter()
-            .filter(|entry| entry.chain == *chain)
-            .map(|entry| entry.value().clone())
-            .collect()
-    }
-    
-    fn get_prices_for_chain(&self, chain: &Chain) -> Vec<(String, PriceData)> {
-        self.state.prices.iter()
-            .filter(|entry| entry.chain == *chain)
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect()
-    }
-    
-    fn build_token_graph(&self, pools: &[LiquidityPool]) -> HashMap<String, Vec<(String, LiquidityPool)>> {
-        let mut graph: HashMap<String, Vec<(String, LiquidityPool)>> = HashMap::new();
-        
-        for pool in pools {
-            graph.entry(pool.token0.address.clone())
-                .or_insert_with(Vec::new)
-                .push((pool.token1.address.clone(), pool.clone()));
-            
-            graph.entry(pool.token1.address.clone())
-                .or_insert_with(Vec::new)
-                .push((pool.token0.address.clone(), pool.clone()));
-        }
-        
-        graph
-    }
-    
-    fn find_arbitrage_paths(
+    async fn check_triangular_path(
         &self,
-        start_token: &str,
-        graph: &HashMap<String, Vec<(String, LiquidityPool)>>,
-        max_depth: usize,
-    ) -> Vec<Vec<(String, String, LiquidityPool)>> {
-        let mut paths = Vec::new();
-        let mut queue = VecDeque::new();
-        
-        queue.push_back((
-            start_token.to_string(),
-            vec![],
-            HashSet::new(),
-        ));
-        
-        while let Some((current_token, path, visited)) = queue.pop_front() {
-            if path.len() >= max_depth {
-                if path.len() == max_depth && current_token == start_token && !path.is_empty() {
-                    paths.push(path);
-                }
-                continue;
-            }
-            
-            if let Some(neighbors) = graph.get(&current_token) {
-                for (next_token, pool) in neighbors {
-                    if !visited.contains(next_token) || (next_token == start_token && path.len() >= 2) {
-                        let mut new_visited = visited.clone();
-                        new_visited.insert(current_token.clone());
-                        
-                        let mut new_path = path.clone();
-                        new_path.push((current_token.clone(), next_token.clone(), pool.clone()));
-                        
-                        queue.push_back((next_token.clone(), new_path, new_visited));
-                    }
-                }
-            }
-        }
-        
-        paths
-    }
-    
-    async fn calculate_path_profit(
-        &self,
-        path: Vec<(String, String, LiquidityPool)>,
         chain: &Chain,
+        pool1: &LiquidityPool,
+        pool2: &LiquidityPool,
+        pool3: &LiquidityPool,
+        initial_amount: Decimal,
+        gas_price: Decimal,
     ) -> Option<ArbitrageOpportunity> {
-        let initial_amount = Decimal::from(1000);
-        let mut current_amount = initial_amount;
-        let mut trade_legs = Vec::new();
-        let mut total_gas = Decimal::ZERO;
+        // Simulate the trades
+        let amount1 = self.dex_manager.calculate_output_amount(
+            initial_amount,
+            pool1.reserve0,
+            pool1.reserve1,
+            pool1.fee,
+        );
         
-        let gas_price = self.state.gas_prices.get(chain)?;
+        let amount2 = self.dex_manager.calculate_output_amount(
+            amount1,
+            pool2.reserve0,
+            pool2.reserve1,
+            pool2.fee,
+        );
         
-        for (token_in, token_out, pool) in &path {
-            let token_in_is_token0 = pool.token0.address == *token_in;
-            
-            let amount_out = self.dex_manager.calculate_swap_amount(
-                pool,
-                current_amount,
-                token_in_is_token0,
-            ).await.ok()?;
-            
-            let gas_estimate = Decimal::from(150000) * gas_price.fast / Decimal::from(1_000_000_000);
-            total_gas += gas_estimate;
-            
-            trade_legs.push(TradeLeg {
-                exchange: pool.exchange.clone(),
-                pool_address: pool.address.clone(),
-                token_in: token_in.clone(),
-                token_out: token_out.clone(),
-                amount_in: current_amount,
-                amount_out,
-                price: amount_out / current_amount,
-                fee: pool.fee * current_amount,
-                gas_estimate,
-            });
-            
-            current_amount = amount_out;
+        let final_amount = self.dex_manager.calculate_output_amount(
+            amount2,
+            pool3.reserve0,
+            pool3.reserve1,
+            pool3.fee,
+        );
+        
+        // Calculate profit
+        let gross_profit = final_amount - initial_amount;
+        
+        if gross_profit <= Decimal::ZERO {
+            return None;
         }
         
-        let flash_loan_provider = self.get_best_flash_loan_provider(chain)?;
-        let flash_loan_fee = initial_amount * flash_loan_provider.fee_percentage;
+        // Get best flash loan provider
+        let flash_provider = self.flash_loan_manager.get_best_provider(chain, initial_amount)?;
+        let flash_fee = self.flash_loan_manager.calculate_flash_loan_fee(flash_provider, initial_amount);
         
-        let profit_amount = current_amount - initial_amount - flash_loan_fee;
-        let total_cost = total_gas + flash_loan_fee;
+        // Calculate gas cost
+        let gas_units = Decimal::from(500000); // Estimated gas for 3 swaps + flash loan
+        let gas_cost_eth = gas_units * gas_price / Decimal::from(1_000_000_000);
+        let eth_price = Decimal::from(2500);
+        let gas_cost_usd = gas_cost_eth * eth_price;
         
-        if profit_amount > total_cost {
-            let profit_usd = (profit_amount - total_cost).to_f64().unwrap_or(0.0);
-            let roi = ((profit_amount - total_cost) / initial_amount * Decimal::from(100))
-                .to_f64().unwrap_or(0.0);
-            
+        let net_profit = gross_profit - flash_fee - gas_cost_usd;
+        let roi = (net_profit / initial_amount) * Decimal::from(100);
+        
+        if net_profit > Decimal::ZERO {
             Some(ArbitrageOpportunity {
-                id: format!("arb_{}_{}", chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
-                path: trade_legs,
+                id: format!("{}", blake3::hash(format!("{:?}{}", chain, Utc::now()).as_bytes())),
+                chain: *chain,
+                opportunity_type: "Triangular".to_string(),
+                path: vec![
+                    TradePath {
+                        dex: pool1.dex.clone(),
+                        pool_address: pool1.address.clone(),
+                        token_in: pool1.token0.symbol.clone(),
+                        token_out: pool1.token1.symbol.clone(),
+                        amount_in: initial_amount,
+                        amount_out: amount1,
+                    },
+                    TradePath {
+                        dex: pool2.dex.clone(),
+                        pool_address: pool2.address.clone(),
+                        token_in: pool2.token0.symbol.clone(),
+                        token_out: pool2.token1.symbol.clone(),
+                        amount_in: amount1,
+                        amount_out: amount2,
+                    },
+                    TradePath {
+                        dex: pool3.dex.clone(),
+                        pool_address: pool3.address.clone(),
+                        token_in: pool3.token0.symbol.clone(),
+                        token_out: pool3.token1.symbol.clone(),
+                        amount_in: amount2,
+                        amount_out: final_amount,
+                    },
+                ],
                 initial_amount,
-                final_amount: current_amount,
-                profit_amount: profit_amount - total_cost,
-                profit_usd,
+                final_amount,
+                gross_profit,
+                flash_loan_provider: flash_provider.name.clone(),
+                flash_loan_fee: flash_fee,
+                flash_loan_fee_percentage: flash_provider.fee_percentage,
+                gas_cost_usd,
+                net_profit_usd: net_profit,
                 roi_percentage: roi,
-                total_gas_cost: total_gas,
-                flash_loan_fee,
-                chain: chain.clone(),
+                confidence_score: 0.85,
                 timestamp: Utc::now(),
-                execution_time_ms: 0,
             })
         } else {
             None
@@ -366,134 +248,77 @@ impl ArbitrageEngine {
     
     async fn create_cross_dex_opportunity(
         &self,
-        token: &str,
-        buy_exchange: &str,
-        sell_exchange: &str,
-        buy_price: Decimal,
-        sell_price: Decimal,
         chain: &Chain,
-    ) -> Result<ArbitrageOpportunity> {
+        price1: &PriceData,
+        price2: &PriceData,
+        gas_price: Decimal,
+    ) -> Option<ArbitrageOpportunity> {
         let initial_amount = Decimal::from(10000);
+        
+        // Determine buy and sell prices
+        let (buy_price, buy_source, sell_price, sell_source) = if price1.price < price2.price {
+            (price1.price, &price1.source, price2.price, &price2.source)
+        } else {
+            (price2.price, &price2.source, price1.price, &price1.source)
+        };
+        
+        // Calculate profit
         let tokens_bought = initial_amount / buy_price;
         let final_amount = tokens_bought * sell_price;
+        let gross_profit = final_amount - initial_amount;
         
-        let gas_price = self.state.gas_prices.get(chain)
-            .ok_or_else(|| anyhow::anyhow!("Gas price not found"))?;
+        // Get flash loan details
+        let flash_provider = self.flash_loan_manager.get_best_provider(chain, initial_amount)?;
+        let flash_fee = self.flash_loan_manager.calculate_flash_loan_fee(flash_provider, initial_amount);
         
-        let gas_estimate = Decimal::from(300000) * gas_price.fast / Decimal::from(1_000_000_000);
+        // Calculate gas cost
+        let gas_units = Decimal::from(300000);
+        let gas_cost_eth = gas_units * gas_price / Decimal::from(1_000_000_000);
+        let eth_price = Decimal::from(2500);
+        let gas_cost_usd = gas_cost_eth * eth_price;
         
-        let flash_loan_provider = self.get_best_flash_loan_provider(chain)
-            .ok_or_else(|| anyhow::anyhow!("No flash loan provider"))?;
-        let flash_loan_fee = initial_amount * flash_loan_provider.fee_percentage;
+        let net_profit = gross_profit - flash_fee - gas_cost_usd;
+        let roi = (net_profit / initial_amount) * Decimal::from(100);
         
-        let profit = final_amount - initial_amount - gas_estimate - flash_loan_fee;
-        
-        let trade_legs = vec![
-            TradeLeg {
-                exchange: buy_exchange.to_string(),
-                pool_address: String::new(),
-                token_in: "USDC".to_string(),
-                token_out: token.to_string(),
-                amount_in: initial_amount,
-                amount_out: tokens_bought,
-                price: buy_price,
-                fee: initial_amount * Decimal::from_str("0.003").unwrap(),
-                gas_estimate: gas_estimate / Decimal::from(2),
-            },
-            TradeLeg {
-                exchange: sell_exchange.to_string(),
-                pool_address: String::new(),
-                token_in: token.to_string(),
-                token_out: "USDC".to_string(),
-                amount_in: tokens_bought,
-                amount_out: final_amount,
-                price: sell_price,
-                fee: tokens_bought * Decimal::from_str("0.003").unwrap(),
-                gas_estimate: gas_estimate / Decimal::from(2),
-            },
-        ];
-        
-        Ok(ArbitrageOpportunity {
-            id: format!("arb_{}_{}", chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
-            path: trade_legs,
-            initial_amount,
-            final_amount,
-            profit_amount: profit,
-            profit_usd: profit.to_f64().unwrap_or(0.0),
-            roi_percentage: (profit / initial_amount * Decimal::from(100)).to_f64().unwrap_or(0.0),
-            total_gas_cost: gas_estimate,
-            flash_loan_fee,
-            chain: chain.clone(),
-            timestamp: Utc::now(),
-            execution_time_ms: 0,
-        })
-    }
-    
-    async fn calculate_sandwich_profit(&self, pool: &LiquidityPool, gas_price: &GasPrice) -> Option<ArbitrageOpportunity> {
-        let target_trade_amount = Decimal::from(50000);
-        let frontrun_amount = target_trade_amount / Decimal::from(10);
-        
-        let price_impact = (frontrun_amount * Decimal::from(2)) / (pool.reserve0 + pool.reserve1);
-        
-        if price_impact < Decimal::from_str("0.01").unwrap() {
-            return None;
-        }
-        
-        let expected_profit = target_trade_amount * price_impact * Decimal::from_str("0.5").unwrap();
-        
-        let gas_cost = Decimal::from(500000) * gas_price.fast / Decimal::from(1_000_000_000);
-        
-        let net_profit = expected_profit - gas_cost;
-        
-        if net_profit > Decimal::from(100) {
+        if net_profit > Decimal::ZERO {
             Some(ArbitrageOpportunity {
-                id: format!("arb_{}_{}", pool.chain.chain_id(), Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+                id: format!("{}", blake3::hash(format!("{:?}{}", chain, Utc::now()).as_bytes())),
+                chain: *chain,
+                opportunity_type: "Cross-DEX".to_string(),
                 path: vec![
-                    TradeLeg {
-                        exchange: pool.exchange.clone(),
-                        pool_address: pool.address.clone(),
-                        token_in: pool.token0.address.clone(),
-                        token_out: pool.token1.address.clone(),
-                        amount_in: frontrun_amount,
-                        amount_out: frontrun_amount,
-                        price: Decimal::ONE,
-                        fee: frontrun_amount * pool.fee,
-                        gas_estimate: gas_cost / Decimal::from(2),
+                    TradePath {
+                        dex: buy_source.clone(),
+                        pool_address: String::new(),
+                        token_in: "USDC".to_string(),
+                        token_out: price1.token_pair.clone(),
+                        amount_in: initial_amount,
+                        amount_out: tokens_bought,
                     },
-                    TradeLeg {
-                        exchange: pool.exchange.clone(),
-                        pool_address: pool.address.clone(),
-                        token_in: pool.token1.address.clone(),
-                        token_out: pool.token0.address.clone(),
-                        amount_in: frontrun_amount,
-                        amount_out: frontrun_amount + expected_profit,
-                        price: Decimal::ONE,
-                        fee: frontrun_amount * pool.fee,
-                        gas_estimate: gas_cost / Decimal::from(2),
+                    TradePath {
+                        dex: sell_source.clone(),
+                        pool_address: String::new(),
+                        token_in: price1.token_pair.clone(),
+                        token_out: "USDC".to_string(),
+                        amount_in: tokens_bought,
+                        amount_out: final_amount,
                     },
                 ],
-                initial_amount: frontrun_amount,
-                final_amount: frontrun_amount + expected_profit,
-                profit_amount: net_profit,
-                profit_usd: net_profit.to_f64().unwrap_or(0.0),
-                roi_percentage: (net_profit / frontrun_amount * Decimal::from(100)).to_f64().unwrap_or(0.0),
-                total_gas_cost: gas_cost,
-                flash_loan_fee: Decimal::ZERO,
-                chain: pool.chain.clone(),
+                initial_amount,
+                final_amount,
+                gross_profit,
+                flash_loan_provider: flash_provider.name.clone(),
+                flash_loan_fee: flash_fee,
+                flash_loan_fee_percentage: flash_provider.fee_percentage,
+                gas_cost_usd,
+                net_profit_usd: net_profit,
+                roi_percentage: roi,
+                confidence_score: 0.75,
                 timestamp: Utc::now(),
-                execution_time_ms: 0,
             })
         } else {
             None
         }
     }
-    
-    fn get_best_flash_loan_provider(&self, chain: &Chain) -> Option<&FlashLoanProvider> {
-        self.flash_loan_providers.iter()
-            .filter(|p| p.chain == *chain)
-            .min_by_key(|p| {
-                let fee_in_basis_points = (p.fee_percentage * Decimal::from(10000)).to_f64().unwrap_or(f64::MAX);
-                (fee_in_basis_points * 1000.0) as u64
-            })
-    }
 }
+
+use rust_decimal::prelude::FromStr;

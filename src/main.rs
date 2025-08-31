@@ -1,136 +1,148 @@
-use anyhow::Result;
 use std::sync::Arc;
-use tracing::{info, warn, error};
-use tracing_subscriber;
+use tokio::sync::RwLock;
+use dashmap::DashMap;
+use tracing::{info, error};
+use anyhow::Result;
 
 mod types;
+mod config;
 mod chains;
-mod websocket;
-mod arbitrage;
-mod flashloan;
-mod ml;
-mod pool_discovery;
-mod storage;
 mod dexs;
+mod flashloan;
+mod arbitrage;
+mod websocket;
+mod storage;
 
-use crate::{
-    types::SharedState,
-    chains::ChainManager,
-    websocket::WebSocketManager,
-    arbitrage::ArbitrageEngine,
-    flashloan::FlashLoanManager,
-    ml::MLAnalyzer,
-    pool_discovery::PoolDiscovery,
-    storage::StorageEngine,
-    dexs::DexManager,
-};
+use types::*;
+use config::Config;
+use chains::ChainManager;
+use dexs::DexManager;
+use flashloan::FlashLoanManager;
+use arbitrage::ArbitrageEngine;
+use websocket::PriceMonitor;
+use storage::StorageEngine;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
         .with_target(false)
-        .with_thread_ids(false)
-        .with_line_number(false)
+        .with_thread_ids(true)
         .init();
 
-    info!("========================================");
-    info!("   ARBITRAGE SCANNER v2.0 STARTING     ");
-    info!("========================================");
+    info!("🚀 Starting DeFi Arbitrage Scanner with Flash Loan Support");
+
+    // Load configuration
+    let config = Config::load()?;
     
-    // Create shared state
-    let state = Arc::new(SharedState::default());
-    info!("✓ Shared state initialized");
+    // Initialize shared state
+    let state = Arc::new(SharedState {
+        prices: Arc::new(DashMap::new()),
+        pools: Arc::new(DashMap::new()),
+        gas_prices: Arc::new(DashMap::new()),
+        opportunities: Arc::new(RwLock::new(Vec::new())),
+    });
+
+    // Initialize storage
+    let storage = Arc::new(StorageEngine::new("./data")?);
     
     // Initialize chain manager
-    let chain_manager = Arc::new(ChainManager::new().await?);
-    info!("✓ Chain manager initialized");
+    let chain_manager = Arc::new(ChainManager::new(&config).await?);
     
-    // Initialize storage
-    let storage = Arc::new(StorageEngine::new("./data/arbitrage.db")?);
-    info!("✓ Storage engine initialized");
-    
-    // Initialize ML analyzer
-    let ml_analyzer = Arc::new(MLAnalyzer::new(storage.clone())?);
-    info!("✓ ML analyzer initialized");
-    
-    // Initialize DEX manager - await the async call
+    // Initialize DEX manager
     let dex_manager = Arc::new(DexManager::new(chain_manager.clone()).await?);
-    info!("✓ DEX manager initialized");
     
     // Initialize flash loan manager
-    let flashloan_manager = Arc::new(FlashLoanManager::new(chain_manager.clone()));
-    info!("✓ Flash loan manager initialized");
-    
-    // Initialize pool discovery
-    let pool_discovery = Arc::new(PoolDiscovery::new(
-        chain_manager.clone(),
-        dex_manager.clone()
-    ));
-    info!("✓ Pool discovery initialized");
+    let flash_loan_manager = Arc::new(FlashLoanManager::new(&config, chain_manager.clone()).await?);
     
     // Initialize arbitrage engine
     let arbitrage_engine = Arc::new(ArbitrageEngine::new(
         state.clone(),
         chain_manager.clone(),
-        dex_manager.clone()
+        dex_manager.clone(),
+        flash_loan_manager.clone(),
+        config.clone(),
     ));
-    info!("✓ Arbitrage engine initialized");
     
-    // Initialize WebSocket manager and start connections
-    let ws_manager = WebSocketManager::new(state.clone()).await?;
-    info!("✓ WebSocket manager initialized");
+    // Initialize price monitor
+    let price_monitor = Arc::new(PriceMonitor::new(state.clone()));
     
-    info!("----------------------------------------");
-    info!("Starting blockchain connections...");
-    info!("----------------------------------------");
-    
-    // Check for API key
-    let api_key = std::env::var("ALCHEMY_API_KEY")
-        .unwrap_or_else(|_| {
-            warn!("ALCHEMY_API_KEY not found in environment");
-            warn!("Using hardcoded key from source");
-            "alcht_oZ7wU7JpIoZejlOWUcMFOpNsIlLDsX".to_string()
-        });
-    
-    if api_key == "demo" || api_key.is_empty() {
-        error!("Invalid API key. Please set ALCHEMY_API_KEY environment variable");
-        return Ok(());
-    }
-    
-    info!("Using Alchemy API key: {}...", &api_key[..10]);
-    
-    // Start WebSocket connections
-    ws_manager.start_all_connections().await;
-    
-    // Give connections time to establish
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
-    info!("========================================");
-    info!("    SCANNER RUNNING - MONITORING...    ");
-    info!("========================================");
-    info!("");
-    info!("Watching for:");
-    info!("  • Large swaps (>10 ETH)");
-    info!("  • Gas price changes");
-    info!("  • Arbitrage opportunities");
-    info!("");
-    info!("Press Ctrl+C to stop");
-    info!("");
-    
-    // Keep the main thread alive
-    loop {
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-        
-        // Print status every minute
-        let gas_prices = state.gas_prices.len();
-        let pools = state.liquidity_pools.len();
-        let opportunities = state.opportunities.read().await.len();
-        
-        if gas_prices > 0 || pools > 0 || opportunities > 0 {
-            info!("📊 Status: {} chains | {} pools | {} opportunities", 
-                  gas_prices, pools, opportunities);
+    // Start price monitoring
+    let monitor_clone = price_monitor.clone();
+    tokio::spawn(async move {
+        if let Err(e) = monitor_clone.start().await {
+            error!("Price monitor error: {}", e);
         }
-    }
+    });
+    
+    // Start arbitrage scanning loop
+    let arb_engine = arbitrage_engine.clone();
+    let state_clone = state.clone();
+    let storage_clone = storage.clone();
+    
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+        
+        loop {
+            interval.tick().await;
+            
+            match arb_engine.scan_opportunities().await {
+                Ok(opportunities) => {
+                    let mut opps = state_clone.opportunities.write().await;
+                    *opps = opportunities.clone();
+                    
+                    for opp in opportunities {
+                        if opp.net_profit_usd > config.min_profit_usd {
+                            info!(
+                                "💰 Arbitrage Opportunity Found!
+                                Chain: {:?}
+                                Type: {}
+                                Profit: ${:.2}
+                                ROI: {:.2}%
+                                Flash Loan: {} ({:.3}% fee)
+                                Gas Cost: ${:.2}",
+                                opp.chain,
+                                opp.opportunity_type,
+                                opp.net_profit_usd,
+                                opp.roi_percentage,
+                                opp.flash_loan_provider,
+                                opp.flash_loan_fee_percentage,
+                                opp.gas_cost_usd
+                            );
+                            
+                            // Store opportunity
+                            let _ = storage_clone.store_opportunity(&opp).await;
+                        }
+                    }
+                }
+                Err(e) => error!("Scan error: {}", e),
+            }
+        }
+    });
+    
+    // Start gas price monitoring
+    let chain_mgr = chain_manager.clone();
+    let state_clone2 = state.clone();
+    
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(15));
+        
+        loop {
+            interval.tick().await;
+            
+            for chain in Chain::all() {
+                if let Ok(gas_price) = chain_mgr.get_gas_price(&chain).await {
+                    state_clone2.gas_prices.insert(chain, gas_price);
+                }
+            }
+        }
+    });
+    
+    info!("✅ All systems initialized. Scanning for arbitrage opportunities...");
+    
+    // Wait for shutdown signal
+    tokio::signal::ctrl_c().await?;
+    info!("Shutting down...");
+    
+    Ok(())
 }
