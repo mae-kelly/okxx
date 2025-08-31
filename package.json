@@ -1,0 +1,19 @@
+{
+  "name": "mev-arbitrage-bot",
+  "version": "2.0.0",
+  "scripts": {
+    "build:rust": "cd rust-engine && cargo build --release",
+    "build:contracts": "hardhat compile",
+    "deploy": "hardhat run scripts/deploy.js --network mainnet",
+    "start:engine": "./rust-engine/target/release/mev-arbitrage-engine",
+    "start:ml": "python ml-optimizer/server.py",
+    "start:all": "docker-compose up -d && npm run start:engine",
+    "monitor": "node infrastructure/monitor.js"
+  },
+  "dependencies": {
+    "ethers": "^5.7.2",
+    "hardhat": "^2.19.0",
+    "@flashbots/ethers-provider-bundle": "^0.6.2",
+    "dotenv": "^16.3.1"
+  }
+}

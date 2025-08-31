@@ -1,32 +1,17 @@
-# Environment files
+node_modules/
 .env
-.env.production
 .env.local
-*.env
-
-# Keys and secrets
-*.key
-*.pem
-private_key.txt
-
-# Build artifacts
-target/
-Cargo.lock
-
-# IDE
+.env.production
+deployment.json
+artifacts/
+cache/
+coverage/
+coverage.json
+typechain/
+typechain-types/
+*.log
+.DS_Store
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# Logs
-logs/
-*.log
-
-# Data
-data/*.db
-data/*.log
-
-# OS
-.DS_Store
-Thumbs.db
