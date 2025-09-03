@@ -2,54 +2,35 @@
 name = "arb-scanner"
 version = "0.2.0"
 edition = "2021"
+default-run = "arb-scanner"
+
+[[bin]]
+name = "arb-scanner"
+path = "src/main.rs"
+
+[lib]
+name = "arb_scanner"
+path = "src/lib.rs"
 
 [dependencies]
-ethers = { version = "2.0", features = ["ws", "rustls"] }
+ethers = { version = "2.0", features = ["ws", "ipc"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 rand = "0.8"
-dashmap = "6.1"
+dashmap = "6.1.0"
 parking_lot = "0.12"
 chrono = "0.4"
 futures = "0.3"
-dotenv = "0.15"
-hex = "0.4"
-log = "0.4"
-env_logger = "0.11"
 anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
 async-trait = "0.1"
+hex = "0.4"
+dotenv = "0.15"
 
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 strip = false
-
-[profile.dev]
-opt-level = 0
-debug = true
-
-[[bin]]
-name = "mock-realistic"
-path = "src/main_mock_realistic.rs"
-
-[[bin]]
-name = "mock-http"
-path = "src/main_mock_http.rs"
-
-[[bin]]
-name = "main-speed"
-path = "src/main_speed.rs"
-
-[[bin]]
-name = "mempool"
-path = "src/main_mempool.rs"
-
-[[bin]]
-name = "multichain"
-path = "src/main_multichain.rs"
-
-[[bin]]
-name = "hyperspeed"
-path = "src/main_hyperspeed.rs"
