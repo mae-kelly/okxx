@@ -56,9 +56,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     provider.clone()
                 );
                 
-                // Get both pairs in parallel
-                let uni_pair_future = uni_factory.method::<_, Address>("getPair", (t0, t1)).unwrap().call();
-                let sushi_pair_future = sushi_factory.method::<_, Address>("getPair", (t0, t1)).unwrap().call();
+                // Fixed: Create bindings for method calls before using .call()
+                let uni_method = uni_factory.method::<_, Address>("getPair", (t0, t1)).unwrap();
+                let sushi_method = sushi_factory.method::<_, Address>("getPair", (t0, t1)).unwrap();
+                
+                // Now call on the bindings
+                let uni_pair_future = uni_method.call();
+                let sushi_pair_future = sushi_method.call();
                 
                 let (uni_addr, sushi_addr) = tokio::join!(uni_pair_future, sushi_pair_future);
                 
@@ -67,9 +71,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let uni_pair = Contract::new(uni_addr, pair_abi.clone(), provider.clone());
                         let sushi_pair = Contract::new(sushi_addr, pair_abi, provider.clone());
                         
-                        // Get reserves in parallel
-                        let uni_res_future = uni_pair.method::<_, (U256, U256, U256)>("getReserves", ()).unwrap().call();
-                        let sushi_res_future = sushi_pair.method::<_, (U256, U256, U256)>("getReserves", ()).unwrap().call();
+                        // Fixed: Create bindings for reserves calls
+                        let uni_reserves_method = uni_pair.method::<_, (U256, U256, U256)>("getReserves", ()).unwrap();
+                        let sushi_reserves_method = sushi_pair.method::<_, (U256, U256, U256)>("getReserves", ()).unwrap();
+                        
+                        // Now call on the bindings
+                        let uni_res_future = uni_reserves_method.call();
+                        let sushi_res_future = sushi_reserves_method.call();
                         
                         let (uni_res, sushi_res) = tokio::join!(uni_res_future, sushi_res_future);
                         

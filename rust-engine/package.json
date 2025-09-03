@@ -1,0 +1,27 @@
+{
+  "name": "arbitrage-bot",
+  "version": "1.0.0",
+  "scripts": {
+    "setup": "bash setup-and-fund.sh",
+    "test:connection": "node scripts/test-connection.js",
+    "deploy:testnet": "npx hardhat run scripts/deploy.js --network arbitrumGoerli",
+    "deploy:mainnet": "npx hardhat run scripts/deploy.js --network arbitrum",
+    "bot:test": "node scripts/bot-testnet.js",
+    "bot:main": "node scripts/bot-mainnet.js",
+    "fund:check": "node scripts/check-balance.js"
+  },
+  "dependencies": {
+    "@aave/core-v3": "^1.19.3",
+    "@nomiclabs/hardhat-ethers": "^2.2.3",
+    "@nomiclabs/hardhat-etherscan": "^3.1.8",
+    "@openzeppelin/contracts": "^5.4.0",
+    "@uniswap/v2-periphery": "^1.1.0-beta.0",
+    "axios": "^1.11.0",
+    "chalk": "^5.6.0",
+    "clipboardy": "^4.0.0",
+    "dotenv": "^17.2.1",
+    "ethers": "^5.7.2",
+    "hardhat": "^2.19.0",
+    "open": "^10.2.0"
+  }
+}
