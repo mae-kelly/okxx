@@ -1,0 +1,19 @@
+🔑 Generating new wallet for arbitrage bot...
+
+=================================
+WALLET GENERATED SUCCESSFULLY
+=================================
+Address: 0xa09cc7fa2f3b47033244c6f145dc8ef09fb1daac
+Private Key: c9809a7726b1cdb64e1f13c9f4e121b446c8ff33193714d437de4657e2e4dade
+=================================
+
+📝 Add to .env file:
+PRIVATE_KEY=c9809a7726b1cdb64e1f13c9f4e121b446c8ff33193714d437de4657e2e4dade
+
+⚠️  SECURITY NOTES:
+1. Never share or commit your private key
+2. Send only small amounts of ETH for gas
+3. Save this information securely
+
+💰 Fund this address on Arbitrum:
+https://arbiscan.io/address/0xa09cc7fa2f3b47033244c6f145dc8ef09fb1daac

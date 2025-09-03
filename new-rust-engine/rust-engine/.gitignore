@@ -1,0 +1,32 @@
+# Environment variables - NEVER COMMIT!
+.env
+.env.local
+.env.production
+
+# Build artifacts
+target/
+Cargo.lock
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Deployment artifacts
+contracts/artifacts/
+contracts/cache/
+contracts/node_modules/
+
+# Private keys - NEVER COMMIT!
+*.key
+*.pem
+wallets/
